@@ -1,0 +1,4 @@
+{{- /* Template for generating all CSV rows in a single output */ -}}
+{{- range . -}}
+{{ ._index_ }}. {{ .name }} ({{ .age }}) from {{ .city }}
+{{ end -}}
