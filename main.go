@@ -63,6 +63,11 @@ func newApp() *app {
 	pflag.CommandLine.Init("latex-fast-compile", pflag.ContinueOnError)
 	// The help message
 	pflag.Usage = printHelp
+	// if no args, print help
+	if len(os.Args) == 1 {
+		printHelp()
+		os.Exit(0)
+	}
 	// Parse the flags
 	err := pflag.CommandLine.Parse(os.Args[1:])
 	if err != nil {
@@ -93,7 +98,7 @@ func main() {
 
 func (a *app) run() error {
 	if a.csvPath == "" || a.templatePath == "" || a.outPath == "" {
-		return errors.New("flags -csv, -template, and -out are required")
+		return errors.New("flags --csv, --template, and --out are required")
 	}
 
 	// Get the sprout functions to use in the templates
