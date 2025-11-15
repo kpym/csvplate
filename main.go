@@ -15,6 +15,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +23,6 @@ import (
 	"github.com/go-sprout/sprout"
 	"github.com/go-sprout/sprout/group/all"
 	"github.com/spf13/pflag"
-	"golang.org/x/text/encoding/charmap"
 	"text/template"
 )
 
@@ -37,22 +37,44 @@ type app struct {
 	force        bool
 }
 
+var prehelp = `csvplate (version: ` + version + `): a CSV templated file generator
+
+Usage: csvplate [options]
+Options:
+`
+var posthelp = `
+Mode of operation:
+  If the output file name contains template expressions ({{...}}), one file per row
+  will be created, else a single file will be created with all rows.
+  In single file mode, the dot (.) in the template is a slice of objects (one per row).
+  In per-row mode, the dot (.) in the template is a single object (the current row).
+  The first line of the CSV is assumed to be the header line and will be used as field names,
+  except if the --noheader flag is set in which case the fields will be named C1, C2, ...
+  The field name specified with --counter will contain the row number (starting at 1).
+  If --csv or --template is omitted or empty, stdin is used.
+  If --out is omitted or empty, stdout is used in single file mode.
+  If the output file already exists, an error is returned unless --force is set.
+  If --csv or --template is not an existing file, it is treated as the actual content.
+  The template functions from Sprout are available in the templates.
+
+Examples:
+  csvplate --csv data.csv --template template.txt --out output.txt
+  csvplate -f -i data.csv -t template.txt -o output_{{.Name}}.txt
+  cat data.csv | csvplate -n -t template.txt
+`
+
 func printHelp() {
 	// get the default error output
 	var out = pflag.CommandLine.Output()
 	// write the help message
-	fmt.Fprintf(out, "csvplate (version: %s): a CSV templated file generator\n\n", version)
-	fmt.Fprintf(out, "Usage: csvplate [options]\n\n")
-	fmt.Fprintf(out, "Options:\n")
+	fmt.Fprint(out, prehelp)
 	pflag.PrintDefaults()
-	fmt.Fprintf(out, "Examples:\n")
-	fmt.Fprintf(out, "  csvplate --csv data.csv --template template.txt --out output.txt\n")
-	fmt.Fprintf(out, "  csvplate -f -i data.csv -t template.txt -o output_{{.Name}}.txt\n")
+	fmt.Fprint(out, posthelp)
 }
 
 func newApp() *app {
-	csvPath := pflag.StringP("csv", "i", "", "Path to input CSV file")
-	templatePath := pflag.StringP("template", "t", "", "Path to Go template file")
+	csvPath := pflag.StringP("csv", "i", "", "Path to input CSV file, or the CSV content itself")
+	templatePath := pflag.StringP("template", "t", "", "Path to Go template file, or the template content itself")
 	outPath := pflag.StringP("out", "o", "", "Output file path (may include template expressions)")
 	counter := pflag.StringP("counter", "c", "_index_", "The field name to use for the row counter")
 	noHeader := pflag.BoolP("noheader", "n", false, "Treat CSV as having no header row")
@@ -97,8 +119,17 @@ func main() {
 }
 
 func (a *app) run() error {
-	if a.csvPath == "" || a.templatePath == "" || a.outPath == "" {
-		return errors.New("flags --csv, --template, and --out are required")
+	if a.csvPath == "" && a.templatePath == "" {
+		return errors.New("one of --csv or --template is required")
+	}
+	if a.csvPath == "" {
+		a.csvPath = "-"
+	}
+	if a.templatePath == "" {
+		a.templatePath = "-"
+	}
+	if a.outPath == "" {
+		a.outPath = "-"
 	}
 
 	// Get the sprout functions to use in the templates
@@ -132,13 +163,28 @@ func (a *app) run() error {
 }
 
 func (a *app) loadCSV() ([]map[string]string, error) {
-	f, err := os.Open(a.csvPath)
-	if err != nil {
-		return nil, fmt.Errorf("open csv: %w", err)
+	var f io.Reader
+	var err error
+	if a.csvPath == "-" {
+		// Read from stdin
+		f = os.Stdin
+	} else {
+		ff, err := os.Open(a.csvPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				// csvPath is containing the actual CSV data
+				// read from string
+				f = strings.NewReader(a.csvPath)
+			} else {
+				return nil, fmt.Errorf("open csv: %w", err)
+			}
+		} else {
+			defer ff.Close()
+			f = ff
+		}
 	}
-	defer f.Close()
 
-	reader := csv.NewReader(charmap.Windows1252.NewDecoder().Reader(f))
+	reader := csv.NewReader(f)
 	data, err := reader.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("read csv: %w", err)
@@ -185,9 +231,25 @@ func (a *app) loadCSV() ([]map[string]string, error) {
 
 // parseTemplate reads and parses a template file with the given functions.
 func parseTemplate(path string, funcs template.FuncMap) (*template.Template, error) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read template: %w", err)
+	var content []byte
+	var err error
+	if path == "-" {
+		// Read from stdin
+		content, err = io.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("read template from stdin: %w", err)
+		}
+	} else {
+		content, err = os.ReadFile(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				// path is containing the actual template data
+				// read from string
+				content = []byte(path)
+			} else {
+				return nil, fmt.Errorf("read template: %w", err)
+			}
+		}
 	}
 	tmpl, err := template.New("content").Funcs(funcs).Parse(string(content))
 	if err != nil {
@@ -207,31 +269,40 @@ func sproutFuncMap() (template.FuncMap, error) {
 
 // writeSingle creates a single output file from the template and all rows.
 func writeSingle(outPath string, tmpl *template.Template, rows []map[string]string, force bool) error {
-	// Create output directories (if needed)
-	outDir := filepath.Dir(outPath)
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return fmt.Errorf("create directories: %w", err)
-	}
-	// Check if file exists
-	if !force {
-		if _, err := os.Stat(outPath); err == nil {
-			return fmt.Errorf("output file %s already exists (use -force to overwrite)", outPath)
-		} else if err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("inspect output file %s: %w", outPath, err)
+	var f *os.File
+	var err error
+	if outPath == "-" {
+		// Write to stdout
+		f = os.Stdout
+	} else {
+		// Create output directories (if needed)
+		outDir := filepath.Dir(outPath)
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			return fmt.Errorf("create directories: %w", err)
 		}
+		// Check if file exists
+		if !force {
+			if _, err := os.Stat(outPath); err == nil {
+				return fmt.Errorf("output file %s already exists (use -force to overwrite)", outPath)
+			} else if err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("inspect output file %s: %w", outPath, err)
+			}
+		}
+		// Create the output file
+		f, err = os.Create(outPath)
+		if err != nil {
+			return fmt.Errorf("create output file: %w", err)
+		}
+		defer f.Close()
 	}
-	// Create the output file
-	f, err := os.Create(outPath)
-	if err != nil {
-		return fmt.Errorf("create output file: %w", err)
-	}
-	defer f.Close()
 	// Render the template
 	if err := tmpl.Execute(f, rows); err != nil {
 		return fmt.Errorf("execute template: %w", err)
 	}
 
-	fmt.Printf("%s\n", outPath)
+	if outPath != "-" {
+		fmt.Printf("result saved in %s\n", outPath)
+	}
 	return nil
 }
 
@@ -241,6 +312,7 @@ func writePerRow(nameTmpl, contentTmpl *template.Template, rows []map[string]str
 		return nil
 	}
 
+	fmt.Println("results saved in:")
 	var numErrors int
 	var nameBuilder strings.Builder
 	for idx, row := range rows {

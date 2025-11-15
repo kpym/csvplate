@@ -9,20 +9,33 @@ csvplate is a command-line utility that turns rows from a CSV file into rendered
 csvplate (version: --): a CSV templated file generator
 
 Usage: csvplate [options]
-
 Options:
-  -i, --csv string        Path to input CSV file
-  -t, --template string   Path to Go template file
+  -i, --csv string        Path to input CSV file, or the CSV content itself
+  -t, --template string   Path to Go template file, or the template content itself
   -o, --out string        Output file path (may include template expressions)
-  -c, --counter string    The field name to use for the row counter (default "_index_") 
+  -c, --counter string    The field name to use for the row counter (default "_index_")
   -n, --noheader          Treat CSV as having no header row
   -f, --force             Overwrite existing output files
+
+Mode of operation:
+  If the output file name contains template expressions ({{...}}), one file per row
+  will be created, else a single file will be created with all rows.
+  In single file mode, the dot (.) in the template is a slice of objects (one per row).
+  In per-row mode, the dot (.) in the template is a single object (the current row).
+  The first line of the CSV is assumed to be the header line and will be used as field names,
+  except if the --noheader flag is set in which case the fields will be named C1, C2, ...
+  The field name specified with --counter will contain the row number (starting at 1).
+  If --csv or --template is omitted or empty, stdin is used.
+  If --out is omitted or empty, stdout is used in single file mode.
+  If the output file already exists, an error is returned unless --force is set.
+  If --csv or --template is not an existing file, it is treated as the actual content.
+  The template functions from Sprout are available in the templates.
+
 Examples:
   csvplate --csv data.csv --template template.txt --out output.txt
   csvplate -f -i data.csv -t template.txt -o output_{{.Name}}.txt
+  cat data.csv | csvplate -n -t template.txt
 ```
-
-When `--out` contains a template expression (e.g. `output/{{ .Name }}.txt`), csvplate renders the template once per row. Otherwise, it renders the content template once, passing the entire slice of row maps to the template.
 
 ## Template data model
 
