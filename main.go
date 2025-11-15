@@ -5,7 +5,7 @@
 // If single file is created the . is a slice of objects, else the . is a single object.
 // The first line is assumed to be the header line and will be used as the field names, except
 // if the -noheader flag is set in which case the fields will be named C1, C2, ...
-// The template functions from sprig are available in the templates.
+// The template functions from Sprout are available in the templates.
 // Usage:
 //
 //	csvplate [-noheader] -csv input.csv -template template.txt -out output.txt
@@ -19,7 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Masterminds/sprig/v3"
+	"github.com/go-sprout/sprout"
+	"github.com/go-sprout/sprout/group/all"
 	"github.com/spf13/pflag"
 	"golang.org/x/text/encoding/charmap"
 	"text/template"
@@ -95,25 +96,34 @@ func (a *app) run() error {
 		return errors.New("flags -csv, -template, and -out are required")
 	}
 
+	// Get the sprout functions to use in the templates
+	funcs, err := sproutFuncMap()
+	if err != nil {
+		return err
+	}
+
+	// Load the CSV data
 	rows, err := a.loadCSV()
 	if err != nil {
 		return err
 	}
 
-	tmpl, err := parseTemplate("content", a.templatePath)
+	// Parse the content template
+	contentTmpl, err := parseTemplate(a.templatePath, funcs)
 	if err != nil {
 		return err
 	}
 
+	// Create one file per row if output path is a template
 	if strings.Contains(a.outPath, "{{") {
-		nameTmpl, err := template.New("outfile").Funcs(sprig.FuncMap()).Parse(a.outPath)
+		nameTmpl, err := template.New("outfile").Funcs(funcs).Parse(a.outPath)
 		if err != nil {
 			return fmt.Errorf("parse output template: %w", err)
 		}
-		return writePerRow(nameTmpl, tmpl, rows, a.force)
+		return writePerRow(nameTmpl, contentTmpl, rows, a.force)
 	}
-
-	return writeSingle(a.outPath, tmpl, rows, a.force)
+	// Else create a single file
+	return writeSingle(a.outPath, contentTmpl, rows, a.force)
 }
 
 func (a *app) loadCSV() ([]map[string]string, error) {
@@ -132,6 +142,7 @@ func (a *app) loadCSV() ([]map[string]string, error) {
 		return nil, errors.New("csv is empty")
 	}
 
+	// Determine headers : either from first row or generate C1, C2, ...
 	var headers []string
 	start := 0
 	if a.noHeader {
@@ -145,6 +156,7 @@ func (a *app) loadCSV() ([]map[string]string, error) {
 		start = 1
 	}
 
+	// Build the result slice of maps
 	result := make([]map[string]string, 0, len(data)-start)
 	for c, row := range data[start:] {
 		if len(row) == 0 {
@@ -158,30 +170,44 @@ func (a *app) loadCSV() ([]map[string]string, error) {
 				entry[header] = ""
 			}
 		}
+		// Add the counter field
 		entry[a.counter] = fmt.Sprintf("%d", c+1)
+
 		result = append(result, entry)
 	}
 	return result, nil
 }
 
-func parseTemplate(name, path string) (*template.Template, error) {
+// parseTemplate reads and parses a template file with the given functions.
+func parseTemplate(path string, funcs template.FuncMap) (*template.Template, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read template: %w", err)
 	}
-	tmpl, err := template.New(name).Funcs(sprig.FuncMap()).Parse(string(content))
+	tmpl, err := template.New("content").Funcs(funcs).Parse(string(content))
 	if err != nil {
 		return nil, fmt.Errorf("parse template: %w", err)
 	}
 	return tmpl, nil
 }
 
+// sproutFuncMap creates a template.FuncMap with all sprout functions registered.
+func sproutFuncMap() (template.FuncMap, error) {
+	handler := sprout.New()
+	if err := handler.AddGroups(all.RegistryGroup()); err != nil {
+		return nil, fmt.Errorf("register sprout functions: %w", err)
+	}
+	return handler.Build(), nil
+}
+
+// writeSingle creates a single output file from the template and all rows.
 func writeSingle(outPath string, tmpl *template.Template, rows []map[string]string, force bool) error {
+	// Create output directories (if needed)
 	outDir := filepath.Dir(outPath)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return fmt.Errorf("create directories: %w", err)
 	}
-
+	// Check if file exists
 	if !force {
 		if _, err := os.Stat(outPath); err == nil {
 			return fmt.Errorf("output file %s already exists (use -force to overwrite)", outPath)
@@ -189,13 +215,13 @@ func writeSingle(outPath string, tmpl *template.Template, rows []map[string]stri
 			return fmt.Errorf("inspect output file %s: %w", outPath, err)
 		}
 	}
-
+	// Create the output file
 	f, err := os.Create(outPath)
 	if err != nil {
 		return fmt.Errorf("create output file: %w", err)
 	}
 	defer f.Close()
-
+	// Render the template
 	if err := tmpl.Execute(f, rows); err != nil {
 		return fmt.Errorf("execute template: %w", err)
 	}
@@ -204,22 +230,25 @@ func writeSingle(outPath string, tmpl *template.Template, rows []map[string]stri
 	return nil
 }
 
+// writePerRow creates one output file per row using the name and content templates.
 func writePerRow(nameTmpl, contentTmpl *template.Template, rows []map[string]string, force bool) error {
 	if len(rows) == 0 {
 		return nil
 	}
 
 	var numErrors int
+	var nameBuilder strings.Builder
 	for idx, row := range rows {
-		var nameBuilder strings.Builder
+		// Generate the output file name
 		if err := nameTmpl.Execute(&nameBuilder, row); err != nil {
 			return fmt.Errorf("render output name for row %d: %w", idx, err)
 		}
 		outName := nameBuilder.String()
+		nameBuilder.Reset()
 		if outName == "" {
 			return fmt.Errorf("rendered output name for row %d is empty", idx)
 		}
-
+		// Check if file exists
 		if !force {
 			if _, statErr := os.Stat(outName); statErr == nil {
 				errExists := fmt.Errorf("output file %s already exists (use -force to overwrite)", outName)
@@ -230,22 +259,23 @@ func writePerRow(nameTmpl, contentTmpl *template.Template, rows []map[string]str
 				return fmt.Errorf("inspect output file %s: %w", outName, statErr)
 			}
 		}
-
+		// Create output directories (if needed)
 		if err := os.MkdirAll(filepath.Dir(outName), 0o755); err != nil {
 			return fmt.Errorf("create directories for %s: %w", outName, err)
 		}
-
+		// Create the output file
 		f, err := os.Create(outName)
 		if err != nil {
 			return fmt.Errorf("create output file %s: %w", outName, err)
 		}
 		defer f.Close()
-
+		// Render the content template
 		if err := contentTmpl.Execute(f, row); err != nil {
 			return fmt.Errorf("render template for %s: %w", outName, err)
 		}
 		fmt.Printf("%s\n", outName)
 	}
+
 	if numErrors > 0 {
 		return fmt.Errorf("%d files not overwritten.", numErrors)
 	}

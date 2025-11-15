@@ -29,7 +29,7 @@ When `--out` contains a template expression (e.g. `output/{{ .Name }}.txt`), csv
 - Each CSV row becomes a `map[string]string` keyed by column headers (or `C1`, `C2`, ... when `--noheader` is used).
 - The special key defined by `--counter` provides a 1-based row index as a string.
 - For single-output mode, the template receives a slice of those maps. In per-row mode the template receives the map for the current row.
-- All [sprig](https://masterminds.github.io/sprig/) template functions are available.
+- All [sprout](https://docs.atom.codes/sprout/registries/list-of-all-registries) template functions are available.
 
 ## Examples
 
