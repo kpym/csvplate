@@ -24,8 +24,7 @@ Mode of operation:
   In single file mode, the dot (.) in the template is a slice of objects (one per row).
   In per-row mode, the dot (.) in the template is a single object (the current row).
   The first line of the CSV is assumed to be the header line and will be used as field names,
-  except if the --noheader flag is set in which case the fields will be 
-named C1, C2, ...
+  except if the --noheader flag is set in which case the fields will be named C1, C2, ...
   The field name specified with --counter will contain the row number (starting at 1).
   If --csv or --template is omitted or empty, stdin is used.
   If --out is omitted or empty, stdout is used in single file mode.     

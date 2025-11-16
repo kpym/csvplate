@@ -24,6 +24,7 @@ import (
 
 	"github.com/go-sprout/sprout"
 	"github.com/go-sprout/sprout/group/all"
+	"github.com/kpym/utf8reader"
 	"github.com/spf13/pflag"
 )
 
@@ -195,7 +196,7 @@ func (a *app) loadCSV() ([]map[string]string, error) {
 		}
 	}
 
-	reader := csv.NewReader(f)
+	reader := csv.NewReader(utf8reader.New(f))
 	reader.Comma = a.csvSep
 	data, err := reader.ReadAll()
 	if err != nil {
@@ -243,25 +244,33 @@ func (a *app) loadCSV() ([]map[string]string, error) {
 
 // parseTemplate reads and parses a template file with the given functions.
 func parseTemplate(path string, funcs template.FuncMap) (*template.Template, error) {
-	var content []byte
+	var f io.Reader
 	var err error
 	if path == "-" {
 		// Read from stdin
-		content, err = io.ReadAll(os.Stdin)
-		if err != nil {
-			return nil, fmt.Errorf("read template from stdin: %w", err)
-		}
+		f = os.Stdin
 	} else {
-		content, err = os.ReadFile(path)
+		// Try to open the file
+		ff, err := os.Open(path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				// path is containing the actual template data
 				// read from string
-				content = []byte(path)
+				f = strings.NewReader(path)
 			} else {
-				return nil, fmt.Errorf("read template: %w", err)
+				return nil, fmt.Errorf("open template: %w", err)
 			}
+		} else {
+			defer ff.Close()
+			f = ff
 		}
+
+	}
+	// Read the template content
+	tmplReader := utf8reader.New(f)
+	content, err := io.ReadAll(tmplReader)
+	if err != nil {
+		return nil, fmt.Errorf("read template: %w", err)
 	}
 	tmpl, err := template.New("content").Funcs(funcs).Parse(string(content))
 	if err != nil {
