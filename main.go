@@ -19,11 +19,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
+	"unicode/utf8"
 
 	"github.com/go-sprout/sprout"
 	"github.com/go-sprout/sprout/group/all"
 	"github.com/spf13/pflag"
-	"text/template"
 )
 
 var version = "dev"
@@ -35,6 +36,7 @@ type app struct {
 	counter      string
 	noHeader     bool
 	force        bool
+	csvSep       rune
 }
 
 var prehelp = `csvplate (version: ` + version + `): a CSV templated file generator
@@ -60,6 +62,7 @@ Mode of operation:
 Examples:
   csvplate --csv data.csv --template template.txt --out output.txt
   csvplate -f -i data.csv -t template.txt -o output_{{.Name}}.txt
+  csvplate -i data.csv --csv-sep ';' -t template.txt
   cat data.csv | csvplate -n -t template.txt
 `
 
@@ -79,6 +82,7 @@ func newApp() *app {
 	counter := pflag.StringP("counter", "c", "_index_", "The field name to use for the row counter")
 	noHeader := pflag.BoolP("noheader", "n", false, "Treat CSV as having no header row")
 	force := pflag.BoolP("force", "f", false, "Overwrite existing output files")
+	csvSep := pflag.String("csv-sep", ",", "CSV field separator")
 	// keep the flags order
 	pflag.CommandLine.SortFlags = false
 	// in case of error do not display second time
@@ -100,6 +104,12 @@ func newApp() *app {
 		os.Exit(1)
 	}
 
+	sep, size := utf8.DecodeRuneInString(*csvSep)
+	if size == 0 || size != len(*csvSep) {
+		fmt.Fprintln(os.Stderr, "csvplate: --csv-sep must be a single UTF-8 character")
+		os.Exit(1)
+	}
+
 	return &app{
 		csvPath:      *csvPath,
 		templatePath: *templatePath,
@@ -107,6 +117,7 @@ func newApp() *app {
 		counter:      *counter,
 		noHeader:     *noHeader,
 		force:        *force,
+		csvSep:       sep,
 	}
 }
 
@@ -185,6 +196,7 @@ func (a *app) loadCSV() ([]map[string]string, error) {
 	}
 
 	reader := csv.NewReader(f)
+	reader.Comma = a.csvSep
 	data, err := reader.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("read csv: %w", err)
@@ -284,7 +296,7 @@ func writeSingle(outPath string, tmpl *template.Template, rows []map[string]stri
 		if !force {
 			if _, err := os.Stat(outPath); err == nil {
 				return fmt.Errorf("output file %s already exists (use -force to overwrite)", outPath)
-			} else if err != nil && !os.IsNotExist(err) {
+			} else if !os.IsNotExist(err) {
 				return fmt.Errorf("inspect output file %s: %w", outPath, err)
 			}
 		}
@@ -332,7 +344,7 @@ func writePerRow(nameTmpl, contentTmpl *template.Template, rows []map[string]str
 				fmt.Fprintln(os.Stderr, errExists)
 				numErrors++
 				continue
-			} else if statErr != nil && !os.IsNotExist(statErr) {
+			} else if !os.IsNotExist(statErr) {
 				return fmt.Errorf("inspect output file %s: %w", outName, statErr)
 			}
 		}
