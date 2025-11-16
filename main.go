@@ -67,6 +67,7 @@ Examples:
   cat data.csv | csvplate -n -t template.txt
 `
 
+// printHelp prints the help message to the default output.
 func printHelp() {
 	// get the default error output
 	var out = pflag.CommandLine.Output()
@@ -76,6 +77,7 @@ func printHelp() {
 	fmt.Fprint(out, posthelp)
 }
 
+// newApp creates a new app instance using the command line arguments.
 func newApp() *app {
 	csvPath := pflag.StringP("csv", "i", "", "Path to input CSV file, or the CSV content itself")
 	templatePath := pflag.StringP("template", "t", "", "Path to Go template file, or the template content itself")
@@ -122,14 +124,9 @@ func newApp() *app {
 	}
 }
 
-func main() {
-	a := newApp()
-	if err := a.run(); err != nil {
-		fmt.Fprintln(os.Stderr, "csvplate:", err)
-		os.Exit(1)
-	}
-}
-
+// run executes the application logic.
+// if the output path contains template expressions, one file per row is created,
+// else a single file is created.
 func (a *app) run() error {
 	if a.csvPath == "" && a.templatePath == "" {
 		return errors.New("one of --csv or --template is required")
@@ -174,30 +171,47 @@ func (a *app) run() error {
 	return writeSingle(a.outPath, contentTmpl, rows, a.force)
 }
 
-func (a *app) loadCSV() ([]map[string]string, error) {
+// content reads the content from the given file.
+// If the file name is "-", stdin is used.
+// If the file does not exist, the file name is treated as the actual content.
+// The file encoding is guessed and converted to UTF-8 if needed.
+func content(fileName string) (string, error) {
 	var f io.Reader
-	var err error
-	if a.csvPath == "-" {
+	if fileName == "-" {
 		// Read from stdin
 		f = os.Stdin
 	} else {
-		ff, err := os.Open(a.csvPath)
+		ff, err := os.Open(fileName)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				// csvPath is containing the actual CSV data
+				// fileName is containing the actual data
 				// read from string
-				f = strings.NewReader(a.csvPath)
+				f = strings.NewReader(fileName)
 			} else {
-				return nil, fmt.Errorf("open csv: %w", err)
+				return "", fmt.Errorf("open file: %w", err)
 			}
 		} else {
 			defer ff.Close()
 			f = ff
 		}
 	}
+	content, err := io.ReadAll(utf8reader.New(f))
+	if err != nil {
+		return "", fmt.Errorf("read content: %w", err)
+	}
+	return string(content), nil
+}
 
-	reader := csv.NewReader(utf8reader.New(f))
+// loadCSV reads the CSV file and returns a slice of maps representing the rows.
+func (a *app) loadCSV() ([]map[string]string, error) {
+	// Open the CSV file
+	csvContent, err := content(a.csvPath)
+	if err != nil {
+		return nil, fmt.Errorf("read csv: %w", err)
+	}
+	reader := csv.NewReader(strings.NewReader(csvContent))
 	reader.Comma = a.csvSep
+	// Read all data
 	data, err := reader.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("read csv: %w", err)
@@ -244,35 +258,13 @@ func (a *app) loadCSV() ([]map[string]string, error) {
 
 // parseTemplate reads and parses a template file with the given functions.
 func parseTemplate(path string, funcs template.FuncMap) (*template.Template, error) {
-	var f io.Reader
-	var err error
-	if path == "-" {
-		// Read from stdin
-		f = os.Stdin
-	} else {
-		// Try to open the file
-		ff, err := os.Open(path)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				// path is containing the actual template data
-				// read from string
-				f = strings.NewReader(path)
-			} else {
-				return nil, fmt.Errorf("open template: %w", err)
-			}
-		} else {
-			defer ff.Close()
-			f = ff
-		}
-
-	}
-	// Read the template content
-	tmplReader := utf8reader.New(f)
-	content, err := io.ReadAll(tmplReader)
+	// Read the template file
+	tmplContent, err := content(path)
 	if err != nil {
 		return nil, fmt.Errorf("read template: %w", err)
 	}
-	tmpl, err := template.New("content").Funcs(funcs).Parse(string(content))
+	// Parse the template
+	tmpl, err := template.New("content").Funcs(funcs).Parse(tmplContent)
 	if err != nil {
 		return nil, fmt.Errorf("parse template: %w", err)
 	}
@@ -288,34 +280,45 @@ func sproutFuncMap() (template.FuncMap, error) {
 	return handler.Build(), nil
 }
 
+// writer creates a writer for the given file name.
+// If the file name is "-", stdout is used.
+// If force is false and the file exists, an error is returned.
+// All necessary directories are created.
+// The resulting io.WriteCloser is used to write the output.
+func writer(fileName string, force bool) (io.WriteCloser, error) {
+	if fileName == "-" {
+		// Write to stdout
+		return os.Stdout, nil
+	}
+	// Create output directories (if needed)
+	outDir := filepath.Dir(fileName)
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create directories: %w", err)
+	}
+	// Check if file exists
+	if !force {
+		if _, statErr := os.Stat(fileName); statErr == nil {
+			return nil, fmt.Errorf("output file %s already exists (use -force to overwrite)", fileName)
+		} else if !os.IsNotExist(statErr) {
+			return nil, fmt.Errorf("inspect output file %s: %w", fileName, statErr)
+		}
+	}
+	// Create the output file
+	f, err := os.Create(fileName)
+	if err != nil {
+		return nil, fmt.Errorf("create output file: %w", err)
+	}
+	return f, nil
+}
+
 // writeSingle creates a single output file from the template and all rows.
 func writeSingle(outPath string, tmpl *template.Template, rows []map[string]string, force bool) error {
-	var f *os.File
-	var err error
-	if outPath == "-" {
-		// Write to stdout
-		f = os.Stdout
-	} else {
-		// Create output directories (if needed)
-		outDir := filepath.Dir(outPath)
-		if err := os.MkdirAll(outDir, 0o755); err != nil {
-			return fmt.Errorf("create directories: %w", err)
-		}
-		// Check if file exists
-		if !force {
-			if _, err := os.Stat(outPath); err == nil {
-				return fmt.Errorf("output file %s already exists (use -force to overwrite)", outPath)
-			} else if !os.IsNotExist(err) {
-				return fmt.Errorf("inspect output file %s: %w", outPath, err)
-			}
-		}
-		// Create the output file
-		f, err = os.Create(outPath)
-		if err != nil {
-			return fmt.Errorf("create output file: %w", err)
-		}
-		defer f.Close()
+	// Get the file writer
+	f, err := writer(outPath, force)
+	if err != nil {
+		return err
 	}
+	defer f.Close()
 	// Render the template
 	if err := tmpl.Execute(f, rows); err != nil {
 		return fmt.Errorf("execute template: %w", err)
@@ -346,27 +349,15 @@ func writePerRow(nameTmpl, contentTmpl *template.Template, rows []map[string]str
 		if outName == "" {
 			return fmt.Errorf("rendered output name for row %d is empty", idx)
 		}
-		// Check if file exists
-		if !force {
-			if _, statErr := os.Stat(outName); statErr == nil {
-				errExists := fmt.Errorf("output file %s already exists (use -force to overwrite)", outName)
-				fmt.Fprintln(os.Stderr, errExists)
-				numErrors++
-				continue
-			} else if !os.IsNotExist(statErr) {
-				return fmt.Errorf("inspect output file %s: %w", outName, statErr)
-			}
-		}
-		// Create output directories (if needed)
-		if err := os.MkdirAll(filepath.Dir(outName), 0o755); err != nil {
-			return fmt.Errorf("create directories for %s: %w", outName, err)
-		}
-		// Create the output file
-		f, err := os.Create(outName)
+		// Get the file writer
+		f, err := writer(outName, force)
 		if err != nil {
-			return fmt.Errorf("create output file %s: %w", outName, err)
+			numErrors++
+			fmt.Fprintf(os.Stderr, "  %s: %v\n", outName, err)
+			continue
+		} else {
+			defer f.Close()
 		}
-		defer f.Close()
 		// Render the content template
 		if err := contentTmpl.Execute(f, row); err != nil {
 			return fmt.Errorf("render template for %s: %w", outName, err)
@@ -378,4 +369,13 @@ func writePerRow(nameTmpl, contentTmpl *template.Template, rows []map[string]str
 		return fmt.Errorf("%d files not overwritten.", numErrors)
 	}
 	return nil
+}
+
+// get the params into new app and run it
+func main() {
+	a := newApp()
+	if err := a.run(); err != nil {
+		fmt.Fprintln(os.Stderr, "csvplate:", err)
+		os.Exit(1)
+	}
 }
