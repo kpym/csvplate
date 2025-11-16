@@ -1,3 +1,3 @@
-1. Jean (42) from Paris
-2. Marie (35) from Lyon
-3. Luc (28) from Marseille
+1. Loïc (42) from Paris
+2. Hélène (35) from Lyon
+3. André (28) from Marseille
