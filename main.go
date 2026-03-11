@@ -18,6 +18,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"text/template"
 	"unicode/utf8"
@@ -35,6 +37,7 @@ type app struct {
 	templatePath string
 	outPath      string
 	counter      string
+	keep         keepFunk
 	noHeader     bool
 	force        bool
 	csvSep       rune
@@ -84,6 +87,7 @@ func newApp() *app {
 	outPath := pflag.StringP("out", "o", "", "Output file path (may include template expressions)")
 	counter := pflag.StringP("counter", "c", "_index_", "The field name to use for the row counter")
 	noHeader := pflag.BoolP("noheader", "n", false, "Treat CSV as having no header row")
+	skip := pflag.StringP("skip", "s", "", "Number of lines to skip or regex to match the first (header) line (default: no lines skipped)")
 	force := pflag.BoolP("force", "f", false, "Overwrite existing output files")
 	csvSep := pflag.String("csv-sep", ",", "CSV field separator")
 	// keep the flags order
@@ -113,14 +117,84 @@ func newApp() *app {
 		os.Exit(1)
 	}
 
+	keep := noSkip()
+	if *skip != "" {
+		if n, err := strconv.Atoi(*skip); err == nil {
+			keep = skipNumber(n)
+		} else {
+			keep, err = skipRegex(*skip)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "csvplate: invalid --skip value:", err)
+				os.Exit(1)
+			}
+		}
+	}
+
 	return &app{
 		csvPath:      *csvPath,
 		templatePath: *templatePath,
 		outPath:      *outPath,
 		counter:      *counter,
+		keep:         keep,
 		noHeader:     *noHeader,
 		force:        *force,
 		csvSep:       sep,
+	}
+}
+
+// keepFunk is a function type that takes a line number and the line content and returns false
+// if the line should be skipped, true for the first valid line.
+type keepFunk func(int, string) bool
+
+// noSkip is a keepFunk that does not skip any line.
+func noSkip() keepFunk {
+	return func(_ int, _ string) bool {
+		return true
+	}
+}
+
+// skipNumber returns a keepFunk that skip the first n lines.
+func skipNumber(n int) keepFunk {
+	return func(i int, _ string) bool {
+		return i > n
+	}
+}
+
+// skipRegex returns a keepFunk that skip lines until a line matches the given regex.
+func skipRegex(pattern string) (keepFunk, error) {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("compile skip regex: %w", err)
+	}
+	return func(_ int, line string) bool {
+		return re.MatchString(line)
+	}, nil
+}
+
+// skipLines is a function that skip the first lines
+// using the skipFunc to determine if a line should be skipped (false).
+func skipLines(text string, first keepFunk) string {
+	var line string
+	var i int
+	// find the next \n
+	for {
+		//get the next line
+		idx := strings.IndexByte(text, '\n')
+		if idx < 0 {
+			idx = len(text)
+		}
+		line = text[:idx]
+		i++
+		// have we reached the first good line?
+		if first(i, line) {
+			return text
+		}
+		// have we reached the end of the text?
+		if idx == len(text) {
+			return ""
+		}
+		// skip this line and continue
+		text = text[idx+1:]
 	}
 }
 
@@ -206,6 +280,7 @@ func content(fileName string) (string, error) {
 func (a *app) loadCSV() ([]map[string]string, error) {
 	// Open the CSV file
 	csvContent, err := content(a.csvPath)
+	csvContent = skipLines(csvContent, a.keep)
 	if err != nil {
 		return nil, fmt.Errorf("read csv: %w", err)
 	}
