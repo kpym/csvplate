@@ -66,7 +66,7 @@ Mode of operation:
 Examples:
   csvplate --csv data.csv --template template.txt --out output.txt
   csvplate -f -i data.csv -t template.txt -o output_{{.Name}}.txt
-  csvplate -i data.csv --csv-sep ';' -t template.txt
+  csvplate -i data.csv -d ';' -s 2 -t template.txt
   cat data.csv | csvplate -n -t template.txt
 `
 
@@ -89,7 +89,7 @@ func newApp() *app {
 	noHeader := pflag.BoolP("noheader", "n", false, "Treat CSV as having no header row")
 	skip := pflag.StringP("skip", "s", "", "Number of lines to skip or regex to match the first (header) line (default: no lines skipped)")
 	force := pflag.BoolP("force", "f", false, "Overwrite existing output files")
-	csvSep := pflag.String("csv-sep", ",", "CSV field separator")
+	csvSep := pflag.StringP("csv-sep", "d", ",", "CSV field separator")
 	// keep the flags order
 	pflag.CommandLine.SortFlags = false
 	// in case of error do not display second time

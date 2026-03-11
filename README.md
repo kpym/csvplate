@@ -15,8 +15,9 @@ Options:
   -o, --out string        Output file path (may include template expressions)
   -c, --counter string    The field name to use for the row counter (default "_index_")
   -n, --noheader          Treat CSV as having no header row
+  -s, --skip string       Number of lines to skip or regex to match the first (header) line (default: no lines skipped)  
   -f, --force             Overwrite existing output files
-      --csv-sep string    CSV field separator (default ",")
+  -d, --csv-sep string    CSV field separator (default ",")
 
 Mode of operation:
   If the output file name contains template expressions ({{...}}), one file per row
@@ -35,7 +36,7 @@ Mode of operation:
 Examples:
   csvplate --csv data.csv --template template.txt --out output.txt      
   csvplate -f -i data.csv -t template.txt -o output_{{.Name}}.txt       
-  csvplate -i data.csv --csv-sep ';' -t template.txt
+  csvplate -i data.csv -d ';' -s 2 -t template.txt
   cat data.csv | csvplate -n -t template.txt
 ```
 
@@ -60,10 +61,10 @@ Render one file per CSV row using a dynamic file name:
 csvplate -i sample.csv -t per_row.tmpl -o "output/{{ .Name }}.txt" -f
 ```
 
-Render a semicolon-delimited CSV by providing an explicit separator:
+Render a semicolon-delimited CSV by providing an explicit separator and skipping the first line:
 
 ```shell
-csvplate --csv french.csv --csv-sep ';' --template all_rows.tmpl --out output/fr_all.txt --force
+csvplate --csv french.csv --csv-sep ';' --skip 1 --template all_rows.tmpl --out output/fr_all.txt --force
 ```
 
 You can check the `example/` folder to see the provided examples and templates.
