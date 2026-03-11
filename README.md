@@ -15,7 +15,7 @@ Options:
   -o, --out string        Output file path (may include template expressions)
   -c, --counter string    The field name to use for the row counter (default "_index_")
   -n, --noheader          Treat CSV as having no header row
-  -s, --skip string       Number of lines to skip or regex to match the first (header) line (default: no lines skipped)  
+  -s, --skip string       Number of lines to skip or regex to match the first (header) line
   -f, --force             Overwrite existing output files
   -d, --csv-sep string    CSV field separator (default ",")
 

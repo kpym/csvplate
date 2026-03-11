@@ -87,7 +87,7 @@ func newApp() *app {
 	outPath := pflag.StringP("out", "o", "", "Output file path (may include template expressions)")
 	counter := pflag.StringP("counter", "c", "_index_", "The field name to use for the row counter")
 	noHeader := pflag.BoolP("noheader", "n", false, "Treat CSV as having no header row")
-	skip := pflag.StringP("skip", "s", "", "Number of lines to skip or regex to match the first (header) line (default: no lines skipped)")
+	skip := pflag.StringP("skip", "s", "", "Number of lines to skip or regex to match the first (header) line")
 	force := pflag.BoolP("force", "f", false, "Overwrite existing output files")
 	csvSep := pflag.StringP("csv-sep", "d", ",", "CSV field separator")
 	// keep the flags order
