@@ -247,23 +247,22 @@ func (a *app) run() error {
 
 // content reads the content from the given file.
 // If the file name is "-", stdin is used.
-// If the file does not exist, the file name is treated as the actual content.
+// If the file name contains {{...}}, it is treated as a actual content
+// else the file is read and the content is returned.
 // The file encoding is guessed and converted to UTF-8 if needed.
 func content(fileName string) (string, error) {
 	var f io.Reader
 	if fileName == "-" {
 		// Read from stdin
 		f = os.Stdin
+	} else if strings.Contains(fileName, "{{") && strings.Contains(fileName, "}}") {
+		// fileName is containing the actual data
+		f = strings.NewReader(fileName)
 	} else {
+		// Read from the file
 		ff, err := os.Open(fileName)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				// fileName is containing the actual data
-				// read from string
-				f = strings.NewReader(fileName)
-			} else {
-				return "", fmt.Errorf("open file: %w", err)
-			}
+			return "", fmt.Errorf("open file: %w", err)
 		} else {
 			defer ff.Close()
 			f = ff
